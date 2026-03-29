@@ -1,0 +1,1 @@
+{"desktop-capability":{"identifier":"desktop-capability","description":"Desktop capability for the terminal app","local":true,"windows":["main"],"permissions":["core:event:allow-listen","core:event:allow-emit","core:event:default","shell:allow-execute","shell:allow-open","core:window:allow-set-title","core:webview:allow-create-webview-window","core:app:allow-name"]}}

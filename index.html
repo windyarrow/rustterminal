@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tauri 2.0 测试应用</title>
+    <link rel="stylesheet" href="/src/style.css">
+       <!-- 添加文件管理器样式 -->
+    <link rel="stylesheet" href="/src/fileManager.css">
+
+</head>
+<body>
+
+    <div class="container">
+        <div class="left-panel">
+            <h1>系统监视</h1>
+            
+            <div class="system-monitor">
+                <div class="monitor-item">
+                    <div class="monitor-label">CPU 使用率</div>
+                    <div class="monitor-value" id="cpu-usage">0%</div>
+                </div>
+                
+                <div class="monitor-item">
+                    <div class="monitor-label">内存使用</div>
+                    <div class="monitor-value" id="memory-usage">0 MB / 0 MB</div>
+                </div>
+                
+                <div class="monitor-item">
+                    <div class="monitor-label">磁盘使用</div>
+                    <div class="monitor-value" id="disk-usage">0 GB / 0 GB</div>
+                </div>
+            </div>
+
+            <div class="input-group">
+                <label for="name-input">测试输入:</label>
+                <input type="text" id="name-input" value="Tauri 用户" placeholder="输入内容..." />
+            </div>
+
+            <button id="greet-btn">调用 Rust 后端</button>
+
+            <div id="result-area">
+                <span>等待操作...</span>
+            </div>
+        </div>
+
+        <div class="right-panel">
+            <h1>终端</h1>
+                <!-- xterm 专用容器，createTerminal 将挂载到此处 -->
+                <div id="xterm-container" style="height:100%; width:100%; "></div>
+
+                 <!-- 文件管理器面板将由JavaScript动态添加 -->
+
+
+                <!-- 如果需要保留回退输入框，可以保留但建议隐藏 -->
+                <div class="terminal-input" style="display:none;">
+                    <span class="terminal-prompt">$</span>
+                    <input type="text" id="terminal-input" placeholder="（回退）输入命令..." autocomplete="off" />
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tauri 2.0 逻辑脚本 -->
+<script type="module">
+    /**
+     * Tauri 2.0 应用主脚本
+     * 
+     * 主要功能：
+     * 1. 初始化终端和文件管理器
+     * 2. 建立终端和文件管理器之间的路径同步
+     * 3. 管理系统监视功能
+     * 4. 处理用户交互
+     */
+    
+    import './src/style.css';
+    
+    import { invoke } from '@tauri-apps/api/core';
+    import { createTerminal } from './src/terminal.js';
+    import { initTerminalFont } from './src/config.js';
+    import { fileManager } from './src/fileManager.js';
+    import { setOnDirectoryChange, getCurrentWorkingDirectory, setCurrentWorkingDirectory } from './src/terminal.js';
+    
+    // 获取 DOM 元素
+    const greetBtn = document.getElementById('greet-btn');
+    const nameInput = document.getElementById('name-input');
+    const resultArea = document.getElementById('result-area');
+    const cpuUsage = document.getElementById('cpu-usage');
+    const memoryUsage = document.getElementById('memory-usage');
+    const diskUsage = document.getElementById('disk-usage');
+    const leftPanel = document.querySelector('.left-panel');
+
+    // 初始化文件管理器
+    fileManager.init();
+    
+    /**
+     * 建立文件管理器和终端的路径关联
+     * 当文件管理器路径变化时，更新终端工作目录
+     */
+    fileManager.setOnPathChange(async (path) => {
+      console.log('文件管理器路径变化:', path);
+      
+      try {
+        // 调用后端API更新全局工作目录
+        await invoke('set_current_working_dir', { path });
+        
+        // 更新终端前端变量
+        setCurrentWorkingDirectory(path);
+        
+        // 如果终端已创建，发送 cd 命令
+        if (window.terminalApi) {
+          // 获取终端实例
+          const terminal = window.terminalApi;
+          
+          // 如果有 PTY 且有效，直接通过 pty_write 发送 cd 命令
+          if (terminal.ptyId && terminal.ptyValid) {
+            try {
+              // 发送 cd 命令到 PTY
+              await invoke('pty_write', { id: terminal.ptyId, data: `cd "${path}"\r` });
+            } catch (err) {
+              console.error('通过 PTY 发送 cd 命令失败:', err);
+              // 回退方案：通过 term.write 发送
+              terminal.term.write(`\rcd "${path}"\r`);
+            }
+          } else {
+            // 没有 PTY 或 PTY 无效，通过 term.write 发送
+            terminal.term.write(`\rcd "${path}"\r`);
+          }
+        }
+      } catch (err) {
+        console.error('更新工作目录失败:', err);
+      }
+    });
+    
+    /**
+     * 当终端目录变化时，更新文件管理器路径
+     */
+    setOnDirectoryChange((path) => {
+      console.log('终端目录变化:', path);
+      // 更新文件管理器的当前路径，无论是否可见
+      fileManager.currentPath = path;
+      fileManager.pathDisplay.textContent = path;
+      
+      // 更新路径输入框
+      const pathInput = fileManager.panel?.querySelector('.path-input');
+      if (pathInput) {
+        pathInput.value = path;
+      }
+      
+      // 如果文件管理器可见，重新加载目录内容
+      if (fileManager.isVisible) {
+        fileManager.loadDirectory(path, false); // false 表示不添加到历史记录
+      }
+    });
+
+    /**
+     * 初始化 xterm 终端
+     * 异步创建终端并保存 API 到全局变量
+     */
+    let terminalApi = null;
+    (async () => {
+        if (!document.getElementById('xterm-container')) {
+            console.error('找不到 xterm 容器：#xterm-container');
+            return;
+        }
+        try {
+            console.log('正在创建终端...');
+            // 创建半透明终端（10%透明度）
+            terminalApi = await createTerminal(document.getElementById('xterm-container'), { opacity: 0.1 });
+            console.log('终端已就绪', terminalApi);
+            
+            // 保存终端API到全局变量，以便在其他地方使用
+            window.terminalApi = terminalApi;
+
+            // 等待一段时间确保终端完全初始化
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
+            // 初始化终端字体设置
+            const fontManager = await initTerminalFont(terminalApi.term);
+            console.log('字体管理器初始化完成', fontManager);
+            
+            // 更新字体设置
+            await fontManager.update();
+            
+            // 再次等待并重新计算尺寸
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
+            // 确保终端获得焦点
+            document.getElementById('xterm-container').addEventListener('click', () => {
+                if (terminalApi && terminalApi.term) {
+                    terminalApi.term.focus();
+                }
+            });
+            
+            // 初始聚焦终端
+            if (terminalApi && terminalApi.term) {
+                terminalApi.term.focus();
+            }
+            
+            // 设置初始工作目录
+            setCurrentWorkingDirectory('/');
+        } catch (err) {
+            console.error('创建终端失败:', err);
+        }
+    })();
+
+    /**
+     * 添加F12键监听 - 切换系统监视面板显示/隐藏
+     */
+    document.addEventListener('keydown', function(event) {
+        if (event.key === 'F12') {
+            event.preventDefault(); // 防止打开浏览器开发者工具
+            leftPanel.classList.toggle('system-monitor-hidden'); // 切换隐藏类
+        }
+    });
+
+    /**
+     * 保留 greet 功能 - 测试Rust后端调用
+     */
+    greetBtn.addEventListener('click', async () => {
+        const name = nameInput.value;
+        resultArea.innerText = '请求中...';
+        try {
+          const res = await invoke('greet', { name });
+          resultArea.innerText = res;
+        } catch (e) {
+          resultArea.innerText = '错误: ' + String(e);
+        }
+    });
+
+    /**
+     * 更新系统监视数据
+     * 从Rust后端获取系统统计信息并更新UI
+     */
+    async function updateSystemStats() {
+        try {
+            const stats = await invoke('get_system_stats');
+            
+            if (stats) {
+                cpuUsage.textContent = `${stats.cpu}%`;
+                memoryUsage.textContent = `${stats.memory.used} MB / ${stats.memory.total} MB`;
+                diskUsage.textContent = `${stats.disk.used} GB / ${stats.disk.total} GB`;
+            }
+        } catch (error) {
+            console.error('获取系统信息失败:', error);
+        }
+    }
+
+    // 定期更新系统信息（每5秒）
+    setInterval(updateSystemStats, 5000);
+
+    // 初始加载系统信息
+    updateSystemStats();
+
+    /**
+     * 环境检查 - 验证是否在Tauri环境中运行
+     */
+    if (window.__TAURI_INTERNALS__) {
+        console.log("检测到 Tauri 环境");
+    } else {
+        console.warn("未检测到 Tauri 环境，API 调用可能会失败。");
+    }
+</script>
+
+</body>
+</html>

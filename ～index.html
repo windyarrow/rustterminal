@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tauri 2.0 测试应用</title>
+    <style>
+        :root {
+            --primary-color: #FFC131;
+            --bg-color: #1a1a1a;
+            --text-color: #ffffff;
+            --card-bg: #2a2a2a;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        .container {
+            background-color: var(--card-bg);
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+        }
+
+        h1 {
+            margin-top: 0;
+            font-size: 1.5rem;
+            color: var(--primary-color);
+        }
+
+        .input-group {
+            margin-bottom: 1.5rem;
+            text-align: left;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+            color: #aaa;
+        }
+
+        input {
+            width: 100%;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background-color: #333;
+            color: white;
+            box-sizing: border-box;
+            font-size: 1rem;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+        }
+
+        button {
+            background-color: var(--primary-color);
+            color: #1a1a1a;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            width: 100%;
+            transition: opacity 0.2s;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+            color: #888;
+        }
+
+        #result-area {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            border-radius: 6px;
+            background-color: #333;
+            min-height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.95rem;
+            word-break: break-all;
+        }
+
+        .success { color: #4ade80; }
+        .error { color: #f87171; }
+        .loading { color: #60a5fa; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Tauri 2.0 前端测试</h1>
+        
+        <div class="input-group">
+            <label for="name-input">请输入名字:</label>
+            <input type="text" id="name-input" value="Tauri 用户" placeholder="输入内容..." />
+        </div>
+
+        <button id="greet-btn">调用 Rust 后端</button>
+
+        <div id="result-area">
+            <span>等待操作...</span>
+        </div>
+    </div>
+
+    <!-- Tauri 2.0 逻辑脚本 -->
+    <script type="module">
+        // 1. 导入 invoke
+        import { invoke } from '@tauri-apps/api/core';
+
+        // 获取 DOM 元素
+        const greetBtn = document.getElementById('greet-btn');
+        const nameInput = document.getElementById('name-input');
+        const resultArea = document.getElementById('result-area');
+
+        // 定义异步处理函数
+        async function handleGreet() {
+            const name = nameInput.value;
+
+            // UI 更新：加载中
+            resultArea.className = 'loading';
+            resultArea.innerHTML = `<span>正在请求 Rust 后端处理 "${name}"...</span>`;
+            greetBtn.disabled = true;
+
+            try {
+                // 2. 调用 Rust 命令
+                const response = await invoke('greet', { name });
+
+                // UI 更新：成功
+                resultArea.className = 'success';
+                resultArea.innerText = response;
+
+            } catch (error) {
+                // UI 更新：失败
+                console.error('调用失败:', error);
+                resultArea.className = 'error';
+                resultArea.innerText = `错误: ${error}`;
+            } finally {
+                // 恢复按钮状态
+                greetBtn.disabled = false;
+            }
+        }
+
+        // 绑定点击事件
+        greetBtn.addEventListener('click', handleGreet);
+
+        // 3. 简单的环境检查（可选）
+        // 我们直接检查 window.__TAURI_INTERNALS__ 是否存在
+        // 注意：这是内部 API，仅供调试判断环境，不推荐用于生产逻辑
+        if (window.__TAURI_INTERNALS__) {
+            console.log("检测到 Tauri 环境");
+        } else {
+            console.warn("未检测到 Tauri 环境，API 调用可能会失败。");
+        }
+    </script>
+</body>
+</html>
